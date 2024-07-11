@@ -43,7 +43,7 @@ function encode(str)
       componentBuffer = componentBuffer .. '.'
     elseif d == 15 then
       insert(frameBuffer, tonumber(componentBuffer))
-      frameBuffer = ""
+      componentBuffer = ""
       d = 0
       c = c + 1
     end
@@ -52,5 +52,5 @@ function encode(str)
       frameBuffer = {}
     end
 end
-
-  
+  return frames
+end

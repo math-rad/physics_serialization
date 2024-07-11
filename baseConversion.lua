@@ -1,6 +1,11 @@
-local floor = math.floor
+local floor, clamp= math.floor, math.clamp
 local byte = string.byte
 local insert = table.insert
+local unpack = table.unpack
+local running, yield, resume = coroutine.running, coroutine.yield, coroutine.resume
+
+-- Uninitialized until further implemented
+local client
 
 local symbol = {}
 do
@@ -106,11 +111,41 @@ function toggleFlag(flag, bool)
   flagBlock.Position = ((bool ~= nil) and bool)) or flagBlock.Position == Vector3.Zero and Vector3.One or Vector3.Zero
 end
 
+function setBlock(adress, dataBuffer)
+  pBuffer[adress].CFrame = CFrame.new(unpack(dataBuffer))
+end
+
+function makeClientFlag(flag)
+  toggleFlag(flag, false):SetNetworkOwnership(client)
+end
+
+function awaitFlag(flag)
+  if not pBuffer:FindFirstChild(flag) then
+    toggleFlag(flag, false)
+  end
+  
+  local blockFlag = pBuffer[flag]
+  local thread = running()
+  local function resumeThread()
+    resume(thread)
+  end
+  
+  blockFlag.Changed("Position", resumeThread)
+  yield()
+end
 
 function startBuffer(buffer)
   toggleFlag("active", true)
   
   toggleFlag "sync"
   
-  
+  local frameIndex = 1
+  local bufSize = #buffer
+  while bufferAdresses[frameIndex] do
+    for index = frameIndex, clamp(frameIndex + bufferSize, 1, bufSize),1 do
+      getBlock().CFrame = CFrame.new(unpack(pBuffer[bufferAdresses[index]]))
+    end
+    makeClientFlag "sync"
+    awaitFlag "sync"
+  end
 end

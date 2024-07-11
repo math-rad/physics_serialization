@@ -25,6 +25,7 @@ function getBase(base)
 end
 
 local base9 = getBase(9)
+local base16 = getBase(16)
 
 function encode(str) 
   local stringBuffer = ""
@@ -53,4 +54,63 @@ function encode(str)
     end
 end
   return frames
+end
+
+local frequency = 30
+local rowSize = 60
+local scale = 2
+local pBuffer = workspace.buffer
+
+local flags = {}
+local 
+
+local bufferSize = 0
+local bufferAdresses = {}
+local blocks = {}
+local currentBlock = 0
+
+function makeByteBlock(buffer, x, y, z, flag)
+  local bufferAdress
+  if not flag then
+   bufferSize += 1
+   bufferAdress =  bufferAdress or "0x" .. base16(bufferSize)
+   insert(bufferAdresses, bufferAdress)
+  end
+  local byteBlock = Instance.new("Part")
+  byteBlock.Name = flag or bufferAdress
+  byteBlock.Anchored = true
+  byteBlock.Size = Vector3.one
+  byteBlock.Position = Vector3.new(x, y, z)
+  byteBlock.Parent = buffer
+  
+  blocks[bufferAdress] = byteBlock
+  return byteBlock
+end
+
+function getBlock()
+  currentBlock = currentBlock + 1
+  local adress = bufferAdresses[currentBlock]
+  if not adress then
+    local x = floor(currentBlock / rowSize)
+    local z = currentBlock % rowSize
+    return makeByteBlock(pBuffer, x, 1, z)
+  end
+  return pBuffer[bufferAdresses[currentBlock]]
+end
+
+function toggleFlag(flag, bool)
+  if not pBuffer:FindFirstChild(flag) then
+    makeByteBlock(pBuffer, bufferSizes[flagBuffer] or #flagBuffer:GetChildren(), 3, 1, flag)
+  end
+  local flagBlock = pBuffer[flag]
+  flagBlock.Position = ((bool ~= nil) and bool)) or flagBlock.Position == Vector3.Zero and Vector3.One or Vector3.Zero
+end
+
+
+function startBuffer(buffer)
+  toggleFlag("active", true)
+  
+  toggleFlag "sync"
+  
+  
 end

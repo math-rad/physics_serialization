@@ -67,7 +67,6 @@ local scale = 2
 local pBuffer = workspace.buffer
 
 local flags = {}
-local 
 
 local bufferSize = 0
 local bufferAdresses = {}
@@ -126,12 +125,18 @@ function awaitFlag(flag)
   
   local blockFlag = pBuffer[flag]
   local thread = running()
+  local cfConnection 
+  local posConnection
   local function resumeThread()
     resume(thread)
+    cfConnection:Disconnect()
+    posConnection:Disconnect()
   end
   
-  blockFlag.Changed("Position", resumeThread)
+  cfConnection = blockFlag.Changed("Position"):Connect(resumeThread)
+  posConnection = blockFlag.Changed("CFrame"):Connect(resumeThread)
   yield()
+  
 end
 
 function startBuffer(buffer)

@@ -1,4 +1,6 @@
 local floor = math.floor
+local byte = string.byte
+local insert = table.insert
 
 local symbol = {}
 do
@@ -12,7 +14,6 @@ end
 
 function getBase(base)
     return function(n)
-        local buffer = 0
         local digits = ""
         repeat
           r = n % base
@@ -22,3 +23,34 @@ function getBase(base)
         return base <= 10 and tonumber(digits) or digits
     end
 end
+
+local base9 = getBase(9)
+
+function encode(str) 
+  local stringBuffer = ""
+  local componentBuffer = {}
+  for i = 1, #str, 1 do
+    stringBuffer = stringBuffer .. '9' .. base9(byte(str:sub(i, i)))
+  end
+  local componentBuffer = ""
+  local frames = {}
+  local frameBuffer = {}
+  local c, d = 0, 0
+  for i = 1, #stringBuffer, 1 do
+    componentBuffer = componentBuffer .. stringBuffer:sub(i, i)
+    d = d + 1
+    if d == 2 then
+      componentBuffer = componentBuffer .. '.'
+    elseif d == 15 then
+      insert(frameBuffer, tonumber(componentBuffer))
+      frameBuffer = ""
+      d = 0
+      c = c + 1
+    end
+    if c == 16 then
+      insert(frames, frameBuffer)
+      frameBuffer = {}
+    end
+end
+
+  

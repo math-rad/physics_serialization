@@ -46,14 +46,25 @@ do
 end
 
 function module.getBase(base, symbol)
+    local cache = {}
+    local optNumberType = base <= 10
     return function(number)
+        if cache[number] then
+            return cache[number]
+        end
+
         local convertedNumber = ''
+
         repeat
             local remainder = number % base 
             number = floor(number / base)
             convertedNumber = symbol[remainder + 1] .. convertedNumber
         until number == 0
-        return base <= 10 and tonumber(convertedNumber) or convertedNumber
+        
+        local convertedNumber = optNumberType and tonumber(convertedNumber) or convertedNumber
+        cache[number] = convertedNumber
+
+        return convertedNumber
     end
 end
 
@@ -112,30 +123,26 @@ end
 
 module.buffer = {}
 
-function module.buffer:getNextAvailableAddress() 
+function module.buffer:getNextAvailableIndex() 
     superBuffer:reorganize()
-    local buffers = superBuffer.buffers 
 
-    local lastIndex = self.endIndex
-    local bufferIndex = self.index 
-
-    if not buffers[lastIndex + 1] then
-        if self.endIndex == superBuffer.capacity then
-            warn("no available address, please allocate more memory or deallocate a buffer")
+    if not buffers[self.index + 1] then 
+        if module.superBufferCapacity - self.endIndex == 0 then 
+            return 
         else 
-            return lastIndex + 1, "0x" .. base16(lastIndex + 1)
+            return self.endIndex + 1, "0x" .. base16(self.endIndex + 1)
         end
     end
 
-    for bufferIndex = 2, superbuffer.size, 1 do 
-        if buffers[bufferIndex].startIndex - lastIndex > 0 then 
-            return buffers[bufferIndex].endIndex
-        end
+    for bufferIndex = self.index + 1, superBuffer.size, 1 do 
+       if buffers[bufferIndex].startingIndex - buffers[bufferIndex - 1].endingIndex > 0 then
+        return buffers[bufferIndex - 1].endingIndex + 1, "0x" .. base16(buffers[bufferIndex - 1].endingIndex + 1)
+       end
     end
 end
 
 local bufferMeta = {
-    ["__index"] = module.buffer
+    ["__index"] = module.buffer,
     ["__newindex"] = function()
         error "The buffer may not be modified"
     end
@@ -143,22 +150,23 @@ local bufferMeta = {
 
  -- if not running in roblox you may have to implement the super buffer yourself 
 module.superBuffer = {
-    size = 0
-    instance = nil 
-    initialized = false
-    safe = false
-    buffers = {}
-    availableRanges = {}
+    size = 0,
+    instance = nil, 
+    initialized = false,
+    safe = false,
+    buffers = {},
+    availableRanges = {},
 
     -- cache addresses to minimize computing addresses 
     addresses = {}
 }
 
 local superBuffer = module.superBuffer
+local buffers = superBuffer.buffers
 
  -- Confine super buffer to a maximum size if large block counts consumes too many resources 
-module.maxSBufferSize = 250
-module.useSBufferSize = true
+module.superBufferCapacity = 250
+module.useSuperBufferCapacity = true
 
 function module.superBuffer:assertInitialized()
     assert(self.initialized, "Super buffer has not yet been initialized, please call :initializeSBuffer")
@@ -166,7 +174,7 @@ end
 
 local zero = Vector3.zero
 
-function module.superBuffer:makeMemoryBlock()
+function module.superBuffer:makeBlock(adhereToCapacity)
      self:assertInitialized()
 
      local address = "0x" .. base16(#self.addresses + 1)
@@ -201,46 +209,49 @@ function module.superBuffer:reorganize(skipRangeCalculation)
     end
 end
 
+
  -- no need to pass buffer when it it needs to be defined within a loop first with respect to an iterating index 
 function module.superBuffer:getEarliestIndex()
-    self:reorganize()
+    self:reorganize(true)
 
     local index, address = 1, '0x0'
-    if self.buffers[1].startIndex ~= 0 then
-        return index, address
+    if buffers[1].startIndex ~= 0 then
+         -- I think -1 ?
+        return index, address, buffers[1].startIndex - 1
     end
-
-    local lastEndingIndex = self.buffers[1].endIndex
 
     for index, buffer in ipairs(self.buffers) do 
         if index ~= 1 then
-            if lastEndingIndex < buffer.startIndex and buffer.startIndex - lastEndingIndex > 0 then
-                return buffer.endIndex, buffer.endAddress
-            else
-                lastEndingIndex = buffer.endIndex
+            if buffer.startIndex - buffers[index - 1].endingIndex > 0 then
+                return buffers[index - 1].endingIndex + 1, "0x" .. base16(buffers[index - 1].endingIndex + 1), buffer.startIndex - buffers[index - 1].endIndex, buffers[index - 1]
             end
         end
     end
 end
 
-function module.superBuffer:calculateAvailableRanges()
-    self:reorganize(true) 
-    
-    clear(self.availableRanges)
+function superBuffer:calculateAvailableRanges()
+    self:reorganize(true)
 
-    local earliestIndex = self:getEarliestIndex()
-    local firstBuffer = self.buffers[1]
+    local availableRanges = self.availableRanges
 
-    if firstBuffer then 
-        if firstBuffer.atBottom then 
+     -- no anchored buffer implicates the earliest index to be 0
+    local currentIndex, anchoredBuffer = self:getEarliestIndex()
 
-        end
+    function push(endingIndex)
+        insert(availableRanges, {currentIndex + 1, endingIndex - 1, endingIndex - currentIndex})
     end
 
-    local shallSkipFirstBuffer = false 
+    if not anchoredBuffer and buffers[1] then 
+        push(buffers[1].startingIndex)
+    end
 
-end
+    for bufferIndex, buffer in ipairs(buffers) do 
+         -- if there is a next index and there is a following buffer, we can assume the next index is the following buffers start index 
+        local nextIndex = buffer:getNextAvailableIndex()
 
+        if nextIndex and buffers[bufferIndex + 1] then 
+
+    end
 end
 
 function module.superBuffer:allocate(size)

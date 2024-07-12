@@ -116,11 +116,21 @@ function module.buffer:getNextAvailableAddress()
     superBuffer:reorganize()
     local buffers = superBuffer.buffers 
 
-    local startIndex = self.endIndex
+    local lastIndex = self.endIndex
     local bufferIndex = self.index 
 
-    if not buffers[startIndex + 1] then
-        
+    if not buffers[lastIndex + 1] then
+        if self.endIndex == superBuffer.capacity then
+            warn("no available address, please allocate more memory or deallocate a buffer")
+        else 
+            return lastIndex + 1, "0x" .. base16(lastIndex + 1)
+        end
+    end
+
+    for bufferIndex = 2, superbuffer.size, 1 do 
+        if buffers[bufferIndex].startIndex - lastIndex > 0 then 
+            return buffers[bufferIndex].endIndex
+        end
     end
 end
 
@@ -183,6 +193,8 @@ function module.superBuffer:reorganize(skipRangeCalculation)
     for index, buffer in ipairs(self.buffers) do 
         buffer.index = index 
     end
+
+    self.size = #self.buffers
 
     if not skipRangeCalculation then
         self:calculateAvailableRanges()

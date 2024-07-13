@@ -18,7 +18,7 @@ do
 
         local characters = {}
 
-        while index ~= endCHar or terminate do 
+        while index ~= endChar or terminate do 
             insert(characters, byte(index))
             index = index + increment and 1 or -1
 
@@ -78,15 +78,19 @@ module.encodingIndex = {
 for key, value in pairs(module.encodingIndex) do 
     module.encodingIndex[key] = base9(value)
 end
- -- default to Roblox CFrames which contain 16 numbers: 3 numbers representing XYZ, and a 3x3 rotation matrix 
+
 local componentsPerMedium = 16
-local maximumDigits = 15
+local maximumDigits = 7 
 
 function module:encode(content, componentsPerMedium, maximumDigits)
     local encodedContent = ''
     local componentBuffer = ''
     local mediumBuffer = {}
     local mediums = {}
+
+     -- default to Roblox CFrames which contain 16 numbers: 3 numbers representing XYZ, and a 3x3 rotation matrix 
+    componentsPerMedium = componentsPerMedium or 16
+    maximumDigits = maximumDigits or 7 -- it said 6-7 digits for floats 
 
     local components = 0
     local digits = 0
@@ -130,14 +134,15 @@ function module.buffer:getNextAvailableIndex()
         if module.superBufferCapacity - self.endIndex == 0 then 
             return 
         else 
-            return self.endIndex + 1, "0x" .. base16(self.endIndex + 1)
+            return self.endIndex + 1, "0x" .. base16(self.endIndex + 1), self, nil
         end
     end
 
-    for bufferIndex = self.index + 1, superBuffer.size, 1 do 
-       if buffers[bufferIndex].startingIndex - buffers[bufferIndex - 1].endingIndex > 0 then
-        return buffers[bufferIndex - 1].endingIndex + 1, "0x" .. base16(buffers[bufferIndex - 1].endingIndex + 1)
-       end
+    for index = self.index + 1, superBuffer.size, do 
+        local precedingBuffer = buffers[index - 1]
+        if buffer.startingIndex - precedingBuffer.endingIndex > 1 then
+            return precedingBuffer.endingIndex + 1, "0x" .. base16(precedingBuffer.endingIndex + 1), precedingBuffer, buffer
+        end
     end
 end
 
@@ -163,6 +168,7 @@ module.superBuffer = {
 
 local superBuffer = module.superBuffer
 local buffers = superBuffer.buffers
+local addresses = superBuffer.addresses
 
  -- Confine super buffer to a maximum size if large block counts consumes too many resources 
 module.superBufferCapacity = 250
@@ -215,15 +221,14 @@ function module.superBuffer:getEarliestIndex()
     self:reorganize(true)
 
     local index, address = 1, '0x0'
-    if buffers[1].startIndex ~= 0 then
-         -- I think -1 ?
-        return index, address, buffers[1].startIndex - 1
-    end
 
-    for index, buffer in ipairs(self.buffers) do 
-        if index ~= 1 then
-            if buffer.startIndex - buffers[index - 1].endingIndex > 0 then
-                return buffers[index - 1].endingIndex + 1, "0x" .. base16(buffers[index - 1].endingIndex + 1), buffer.startIndex - buffers[index - 1].endIndex, buffers[index - 1]
+    for bufferIndex, buffer in ipairs(buffers) do 
+        if index == 1 and buffer.startIndex ~= 1 then
+            return 1 -- one based indexing is not based :/
+        else
+            local precedingBuffer = buffers[index - 1]
+            if buffer.startIndex - precedingBuffer.endingIndex > 1 then
+                return precedingBuffer.endingIndex + 1, "0x" .. base16(precedingBuffer.endingIndex + 1), buffer.startIndex - precedingBuffer.endIndex, precedingBuffer
             end
         end
     end
@@ -233,58 +238,72 @@ function superBuffer:calculateAvailableRanges()
     self:reorganize(true)
 
     local availableRanges = self.availableRanges
+    clear(availableRanges)
 
      -- no anchored buffer implicates the earliest index to be 0
     local currentIndex, anchoredBuffer = self:getEarliestIndex()
 
-    function push(endingIndex)
-        insert(availableRanges, {currentIndex + 1, endingIndex - 1, endingIndex - currentIndex})
+    function push(startIndex, endIndex, buffer1, buffer2)
+        insert(availableRanges, {startIndex, endIndex, endIndex - startIndex + 2, buffer1, buffer2})
     end
 
     if not anchoredBuffer and buffers[1] then 
-        push(buffers[1].startingIndex)
+        push(1, buffers[1].startIndex, nil, buffers[1])
     end
 
     for bufferIndex, buffer in ipairs(buffers) do 
          -- if there is a next index and there is a following buffer, we can assume the next index is the following buffers start index 
-        local nextIndex = buffer:getNextAvailableIndex()
+        local nextIndex, endingIndex, buffer1, buffer2 = buffer:getNextAvailableIndex()
 
-        if nextIndex and buffers[bufferIndex + 1] then 
-
+        if nextIndex then
+            push(nextIndex, endingIndex, buffer1, buffer2)
+        end
     end
+
+    return availableRanges
 end
 
-function module.superBuffer:allocate(size)
+-- prefer one closest to start
+
+function sortRanges(range1, range2) 
+    return range1[1] < range2[1] 
+end
+
+function module.superBuffer:balloc(buffer, size)
     self:assertInitialized()
     self:reorganize()
 
-    local startAddress = 0x0
-    local differences = {}
-    for index, buffer in ipairs(self.buffers) do 
-        local startIndex, endIndex = buffer.startIndex, buffer.endIndex 
-        if not (startAddress >= startIndex and startAddress <= endIndex) then 
+    local sufficentRanges = {}
 
+    for index, range in ipairs(self.availableRanges) do 
+        if range[3] >= size then 
+            insert(sufficentRanges, range)
         end
     end
 
+    sort(sufficentRanges, sortRanges)
 
-    local referenceIndex = startAddress
-    local sufficentSpace = false 
+    local range = sufficentRanges[1]
+    local newStartIndex, newEndIndex = unpack(range)
 
-    for _, buffer in ipairs(self.buffers) do 
-        local startIndex, endIndex = buffer.startIndex, buffer.endIndex
-        if startIndex - referenceIndex  > size then 
-            referenceIndex = endIndex
-        else 
-            sufficentSpace = true 
+    if buffer.startIndex then 
+        for index = 0, buffer.size - 1, 1 do 
+            local addressFrom, addressTo = buffer.startIndex + index, newStartIndex + index
             
-            break
+            if self.customImplementation then
+                self.write(addressTo, self.read(addressFrom))
+            else
+                local pBuffer = self.instance
+                pBuffer[addressTo].CFrame = pBuffer[addressFrom].CFrame
+            end
         end
     end
 
-    if sufficentSpace then 
-
+    buffer.startIndex = newStartIndex
+    buffer.endIndex = newEndIndex
 end
+
+
 
 function module.buffer:new()
     module:assertInitialized()

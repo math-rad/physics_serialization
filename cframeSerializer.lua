@@ -1,3 +1,4 @@
+---@diagnostic disable: redefined-local
 --[[
 version: 2.0
 https://github.com/math-rad/physics_serialization/blob/master/cframeSerializer.lua 
@@ -7,7 +8,33 @@ created: ~july 13th 2024
 written under an individual whos aliases are:
     math.rad math-rad bytereality radicalbytes
 ]]
-local floor, clamp, abs, byte, char, insert, concat, sort, clear, remove, find, yield, running = math.floor, math.clamp, math.abs, string.byte, string.char, table.insert, table.concat, table.sort, table.clear, table.remove, table.find, coroutine.yield, coroutine.running 
+local floor, clamp, abs, byte, char, insert, concat, sort, clear, remove, find, unpack, yield, running, resume, wrap, status = math.floor, math.clamp, math.abs, string.byte, string.char, table.insert, table.concat, table.sort, table.clear, table.remove, table.find, table.unpack, coroutine.yield, coroutine.running, coroutine.resume, coroutine.wrap, coroutine.status
+
+do 
+    if not clamp then 
+        function clamp(n, min, max)
+            return n < min and min or n > max or n
+        end
+    end
+
+    if not clear then
+        function clear(t)
+            for i = 1, #t, 1 do
+                t[i] = nil
+            end
+        end
+    end
+
+    if not find then
+        function find(t, v, i)
+            for i  = i or i, #t do 
+                if t[i] == v then 
+                    return i
+                end
+            end
+        end
+    end
+end
 
 local module = {}
 
@@ -20,7 +47,7 @@ do
     local function getCharacterSet(characterA, characterB)
         characterA, characterB = tostring(characterA), tostring(characterB)
 
-        local startChar, endChar = char(characterA), char(characterB)
+        local startChar, endChar = byte(characterA), byte(characterB)
         local index = startChar 
         local increment = true 
         local terminate = false 
@@ -33,12 +60,14 @@ do
 
             if index == 0xff + 1 then 
                 increment = false 
-                index = start 
+                index = startChar 
                 characters = {}
             elseif index == -1 then
                 terminate = true 
             end
         end
+
+        return characters
     end
 
     for _, characterRange in ipairs(characterRangePairs) do
@@ -50,7 +79,7 @@ do
     end
 
     if printRadix then 
-        print(("Maximum radix is " .. #symbol)
+        print(("Maximum radix is " .. #symbol))
     end
 end
 
@@ -65,7 +94,7 @@ function module.getBase(base, symbol)
         local convertedNumber = ''
 
         repeat
-            local remainder = number % base 
+            local remainder = number % base
             number = floor(number / base)
             convertedNumber = symbol[remainder + 1] .. convertedNumber
         until number == 0
@@ -81,11 +110,11 @@ module.base9 = module.getBase(9)
 module.base16 = module.getBase(16)
 
 module.encodingIndex = {
-    "terminate": 0x100
+    ["terminate"] = 0x100
 }
 
 for key, value in pairs(module.encodingIndex) do 
-    module.encodingIndex[key] = base9(value)
+    module.encodingIndex[key] = module.base9(value)
 end
 
 local componentsPerMedium = 16
@@ -98,11 +127,13 @@ function module.makeAddress(index)
         return addressCache[index]
     end 
 
-    local address = "0x" .. base16(index)
+    local address = "0x" .. module.base16(index)
 
     addressCache[index] = address
     return address
 end
+
+local makeAddress = module.makeAddress
 
 function module:encode(content, componentsPerMedium, maximumDigits)
     local encodedContent = ''
@@ -118,7 +149,7 @@ function module:encode(content, componentsPerMedium, maximumDigits)
     local digits = 0
 
     for index = 1, #content, 1 do
-        encodedContent = encodedContent .. index ~= 1 and '9' or '' .. module.base9(byte(content:sub(index, index))) 
+        encodedContent = encodedContent .. index ~= 1 and '9' or '' .. module.base9(byte(content:sub(index, index)))
     end
 
      -- Used in decoding to know when to stop reading
@@ -147,6 +178,27 @@ function module:encode(content, componentsPerMedium, maximumDigits)
     return mediums
 end
 
+-- if not running in roblox you may have to implement the super buffer yourself 
+module.superBuffer = {
+    size = 0,
+    capacity = 0,
+    instance = nil, 
+    initialized = false,
+    safe = false,
+    buffers = {},
+    availableRanges = {},
+
+    -- cache addresses to minimize computing addresses 
+    addresses = {}
+}
+
+local superBuffer = module.superBuffer
+local buffers = superBuffer.buffers
+
+ -- Confine super buffer to a maximum size if large block counts consumes too many resources 
+module.superBufferMaximumCapacity = 250
+module.useSuperBufferCapacity = true
+
 module.buffer = {}
 
 function module.buffer:getNextAvailableIndex() 
@@ -164,8 +216,8 @@ function module.buffer:getNextAvailableIndex()
         end
     end
 
-    for index = self.index + 1, superBuffer.size, do 
-        local precedingBuffer = buffers[index - 1]
+    for index = self.index + 1, superBuffer.size, 1 do
+        local buffer, precedingBuffer = buffers[index - 1], buffers[index]
         if buffer.startingIndex - precedingBuffer.endingIndex > 1 then
             module.threadController:wakeup()
             return precedingBuffer.endingIndex + 1, module.makeAddress(precedingBuffer.endingIndex + 1), precedingBuffer, buffer
@@ -180,45 +232,39 @@ local bufferMeta = {
     end
 }
 
- -- if not running in roblox you may have to implement the super buffer yourself 
-module.superBuffer = {
-    size = 0,
-    capacity = 0,
-    instance = nil, 
-    initialized = false,
-    safe = false,
-    buffers = {},
-    availableRanges = {},
 
-    -- cache addresses to minimize computing addresses 
-    addresses = {}
-}
-
-local superBuffer = module.superBuffer
-local buffers = superBuffer.buffers
-local addresses = superBuffer.addresses
-
- -- Confine super buffer to a maximum size if large block counts consumes too many resources 
-module.superBufferMaximumCapacity = 250
-module.useSuperBufferCapacity = true
 
 function module.superBuffer:assertInitialized()
     assert(self.initialized, "Super buffer has not yet been initialized, please call :initializeSBuffer")
 end
 
+ -- makeBlock can be overided with custom super buffer implementation, Vector3 will most likely only be used in settings like Roblox, or other engines which have a native Vector3 datatype
+---@diagnostic disable-next-line: undefined-global
 local zero = Vector3.zero
 
-function module.superBuffer:makeBlock()
+function module.superBuffer:makeBlock(adhereToMaxCapacity)
      self:assertInitialized()
+     self:reorganize()
 
      module.threadController:async()
 
+     local size = self.capacity
+
+     if module.useSuperBufferCapacity and adhereToMaxCapacity and size > module.superBufferMaximumCapacity then
+        module.threadController:wakeup()
+        return
+     end
+     
+     module.threadController:async()
+     
      local address = makeAddress(#self.addresses + 1)
 
+      -- same with instance, see previous comment 
+---@diagnostic disable-next-line: undefined-global
      local block = Instance.new("Part")
      block.Size = zero
-     block.Position = zero 
-     block.Anchored = true 
+     block.Position = zero
+     block.Anchored = true
      block.Name = address
      block.Parent = self.instance
      
@@ -229,7 +275,7 @@ function module.superBuffer:makeBlock()
      return block, address
 end
 
-function orderAddressRanges(buffer1, buffer2)
+local function orderAddressRanges(buffer1, buffer2)
     return buffer1.startIndex < buffer2.startIndex 
 end
 
@@ -295,7 +341,7 @@ function superBuffer:calculateAvailableRanges()
      -- no anchored buffer implicates the earliest index to be 0
     local currentIndex, anchoredBuffer = self:getEarliestIndex()
 
-    function push(startIndex, endIndex, buffer1, buffer2)
+    local function push(startIndex, endIndex, buffer1, buffer2)
         insert(availableRanges, {startIndex, endIndex, endIndex - startIndex + 2, buffer1, buffer2})
     end
 
@@ -319,7 +365,7 @@ end
 
 -- prefer one closest to start
 
-function sortRanges(range1, range2) 
+local function sortRanges(range1, range2) 
     return range1[1] < range2[1] 
 end
 
@@ -386,7 +432,7 @@ function module.superBuffer:incrementHeapCapacity(sizeIncrement, adhereToMaxCapa
     if module.useSuperBufferCapacity and adhereToMaxCapacity and newCapacity > module.superBufferMaximumCapacity then 
         local difference = newCapacity - module.superBufferMaximumCapacity
         warn (("Adhearing to max super buffer capacity policy(%s block(s) not created)"):format(difference))
-        newCapacity -= difference
+        newCapacity = newCapacity - difference
     end
 
     if newCapacity > currentCapacity then 
@@ -395,7 +441,7 @@ function module.superBuffer:incrementHeapCapacity(sizeIncrement, adhereToMaxCapa
     end
 
     for index = currentCapacity + 1, currentCapacity + 1 + sizeIncrement, 1 do 
-        self:makeBlock(index, adhereToCapacity)
+        self:makeBlock(adhereToMaxCapacity)
     end
 
     module.threadController:wakeup()
@@ -424,7 +470,7 @@ function module.buffer:new(capacity, forceCapacity, params)
         end
     end
 
-    superBuffer:malloc(buffer, size, forceCapacity)
+    superBuffer:malloc(buffer, capacity, forceCapacity)
 
     module.threadController:wakeup()
 
@@ -434,7 +480,7 @@ end
 
 
  -- size in blocks, perhaps use bytes in the feature 
-function module:initializeSBuffer
+function module:initializeSBuffer()
     self.superBuffer.initialized = true
 end
 
@@ -447,17 +493,19 @@ function threadController:async()
     local thread = running()
     local process = self.process
     if thread ~= process then 
-        insert(suspendedThreads, thread)
-        resume(self.thread)
+        insert(self.threads, thread)
+        resume(self.process)
         yield()
     end
 end
 
 function threadController:wakeup()
-    resume(self.thread)
+    resume(self.process)
 end
 
 threadController.thread = wrap(function()
+    local self = threadController
+
     while true do 
         local thread = remove(self.threads, 1)
 

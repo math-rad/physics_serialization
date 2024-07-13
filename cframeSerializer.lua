@@ -152,10 +152,14 @@ module.buffer = {}
 function module.buffer:getNextAvailableIndex() 
     superBuffer:reorganize()
 
+    module.threadController:async()
+
     if not buffers[self.index + 1] then 
         if module.superBufferCapacity - self.endIndex == 0 then 
+            module.threadController:wakeup()
             return 
         else 
+            module.threadController:wakeup()
             return self.endIndex + 1, module.makeAddress(self.endIndex + 1), self, nil
         end
     end
@@ -163,6 +167,7 @@ function module.buffer:getNextAvailableIndex()
     for index = self.index + 1, superBuffer.size, do 
         local precedingBuffer = buffers[index - 1]
         if buffer.startingIndex - precedingBuffer.endingIndex > 1 then
+            module.threadController:wakeup()
             return precedingBuffer.endingIndex + 1, module.makeAddress(precedingBuffer.endingIndex + 1), precedingBuffer, buffer
         end
     end
@@ -206,6 +211,8 @@ local zero = Vector3.zero
 function module.superBuffer:makeBlock()
      self:assertInitialized()
 
+     module.threadController:async()
+
      local address = makeAddress(#self.addresses + 1)
 
      local block = Instance.new("Part")
@@ -217,6 +224,8 @@ function module.superBuffer:makeBlock()
      
      insert(self.addresses, address)
 
+     module.threadController:wakeup()
+
      return block, address
 end
 
@@ -225,6 +234,10 @@ function orderAddressRanges(buffer1, buffer2)
 end
 
 function module.superBuffer:reorganize(skipRangeCalculation)
+    self:assertInitialized()
+
+    module.threadController:async()
+
     if not self.safe then 
         sort(self.buffers, orderAddressRanges)
 
@@ -240,11 +253,17 @@ function module.superBuffer:reorganize(skipRangeCalculation)
     if not skipRangeCalculation then
         self:calculateAvailableRanges()
     end
+
+    module.threadController:wakeup()
 end
 
 
  -- no need to pass buffer when it it needs to be defined within a loop first with respect to an iterating index 
 function module.superBuffer:getEarliestIndex()
+    self:assertInitialized()
+
+    module.threadController:async()
+
     self:reorganize(true)
 
     local index, address = 1, '0x0'
@@ -259,9 +278,15 @@ function module.superBuffer:getEarliestIndex()
             end
         end
     end
+
+    module.threadController:wakeup()
 end
 
 function superBuffer:calculateAvailableRanges()
+    self:assertInitialized()
+
+    module.threadController:async()
+
     self:reorganize(true)
 
     local availableRanges = self.availableRanges
@@ -287,6 +312,8 @@ function superBuffer:calculateAvailableRanges()
         end
     end
 
+    module.threadController:wakeup()
+
     return availableRanges
 end
 
@@ -298,8 +325,10 @@ end
 
 function module.superBuffer:balloc(buffer, size, forceCapacity)
     self:assertInitialized()
+
+    module.threadController:async()
+
     self:reorganize()
-    module.async()
 
     local sufficentRanges = {}
 
@@ -339,13 +368,18 @@ function module.superBuffer:balloc(buffer, size, forceCapacity)
 
     superBuffer.safe = false
 
+    module.threadController:wakeup()
+
     return newStartIndex, newEndIndex
 end
 
 function module.superBuffer:incrementHeapCapacity(sizeIncrement, adhereToMaxCapacity) 
     self:assertInitialized()
+
+    module.threadController:async()
+
     self:reorganize()
-    module.async()
+
     local currentCapacity = self.capacity 
     local newCapacity = currentCapacity + sizeIncrement
 
@@ -356,16 +390,22 @@ function module.superBuffer:incrementHeapCapacity(sizeIncrement, adhereToMaxCapa
     end
 
     if newCapacity > currentCapacity then 
+        module.threadController:wakeup()
         return warn "super buffer capacity not altered, current capacity is already greater than max capacity"
     end
 
     for index = currentCapacity + 1, currentCapacity + 1 + sizeIncrement, 1 do 
         self:makeBlock(index, adhereToCapacity)
     end
+
+    module.threadController:wakeup()
 end
 
 function module.buffer:new(capacity, forceCapacity, params)
     module:assertInitialized()
+
+    module.threadController:async()
+
     local buffer = setmetatable({}, bufferMeta)
     insert(self.buffers, buffer)
 
@@ -385,56 +425,53 @@ function module.buffer:new(capacity, forceCapacity, params)
     end
 
     superBuffer:malloc(buffer, size, forceCapacity)
+
+    module.threadController:wakeup()
+
     return buffer
 end
 
 
 
  -- size in blocks, perhaps use bytes in the feature 
-function module:initializeSBuffer()
-    
+function module:initializeSBuffer
     self.superBuffer.initialized = true
 end
 
-module.suspendedThreads = {}
-module.processing = nil
+local threadController = {}
+module.threadController = threadController
 
-local suspendedThreads = module.suspendedThreads
+threadController.threads = {}
 
-function module.async()
+function threadController:async()
     local thread = running()
-    if module.processing ~= thread then 
+    local process = self.process
+    if thread ~= process then 
         insert(suspendedThreads, thread)
-        module:wakeup()
+        resume(self.thread)
         yield()
     end
 end
 
-function module:finish()
-    resume(module.thread)
+function threadController:wakeup()
+    resume(self.thread)
 end
 
-function module:wakeup()
-    if not module.processing then 
-        resume(module.thread)  
-    end
-end
-
-module.thread = coroutine.wrap(function()
+threadController.thread = wrap(function()
     while true do 
-        local thread = remove(suspendedThreads, 1)
+        local thread = remove(self.threads, 1)
 
         if thread then 
-            if status(thread) == "suspended" then
-                module.processing = thread
+            if status(thread) == "suspended" then 
+                self.process = thread 
                 resume(thread)
                 yield()
             else 
-                insert(suspendedThreads, thread, 1)
-            end
+                insert(self.threads, thread, 1)
+            end 
         else 
-            module.processing = nil 
+            self.process = nil 
             yield()
         end
     end
-)
+end)

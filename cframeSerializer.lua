@@ -447,28 +447,15 @@ function module.superBuffer:incrementHeapCapacity(sizeIncrement, adhereToMaxCapa
     module.threadController:wakeup()
 end
 
-function module.buffer:new(capacity, forceCapacity, params)
+function module.buffer:new(capacity, forceCapacity)
     module:assertInitialized()
-
     module.threadController:async()
 
     local buffer = setmetatable({}, bufferMeta)
     insert(self.buffers, buffer)
 
     buffer.capacity = capacity
-
-    if params and params.customImplementation then 
-        buffer.customImplementation = true
-        assert(params.read, "custom implementation must have a read function") 
-        assert(params.write, "custom implementation must have a write function")
-
-        buffer.read = params.read 
-        buffer.write = params.write
-        
-        if params.superBufferInit then
-            params.superBufferInit(superBuffer)
-        end
-    end
+    buffer.flags = {}
 
     superBuffer:malloc(buffer, capacity, forceCapacity)
 
@@ -477,10 +464,38 @@ function module.buffer:new(capacity, forceCapacity, params)
     return buffer
 end
 
+function module.buffer:malloc(size)
 
+end
+
+function module.buffer:instantiateFlag(flag)
+
+end
+
+function module.buffer:toggleFlag(flag)
+
+end
+
+
+function module.buffer:setClientControl(flag, client)
+    local flagAddress = self.flags[flag]
+
+end
 
  -- size in blocks, perhaps use bytes in the feature 
-function module:initializeSBuffer()
+function module:startSuperBuffer(customBehavior)
+    if customBehavior then 
+        self.customBehavior = true 
+        local read, write, superBufferInit = customBehavior.read, customBehavior.write, customBehavior.superBufferInit
+        assert((read ~= nil) and (write ~= nil) and (superBufferInit ~= nil), "Pleae implement methods write, read and superBufferInit for the super buffer")
+
+        superBufferInit(superBuffer)
+    else 
+        local blockBuffer = Instance.new("Folder")
+        blockBuffer.Name = "MediumBuffer"
+        blockBuffer.Parent = workspace
+    end
+
     self.superBuffer.initialized = true
 end
 

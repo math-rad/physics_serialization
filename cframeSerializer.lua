@@ -1,4 +1,4 @@
--- [[
+--[[
 version: 2.0
 https://github.com/math-rad/physics_serialization/blob/master/cframeSerializer.lua 
 script: cframeSerializer.lua
@@ -6,7 +6,6 @@ description: designed to be somewhat portable and not limited to just roblox and
 created: ~july 13th 2024
 written under an individual whos aliases are:
     math.rad math-rad bytereality radicalbytes
-
 ]]
 
 local floor, clamp, abs, byte, char, insert, concat, sort, clear, yield, running = math.floor, math.clamp, math.abs, string.byte, string.char, table.insert, table.concat, table.sort, table.clear, coroutine.yield, coroutine.running 

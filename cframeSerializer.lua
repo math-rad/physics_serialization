@@ -7,8 +7,7 @@ created: ~july 13th 2024
 written under an individual whos aliases are:
     math.rad math-rad bytereality radicalbytes
 ]]
-
-local floor, clamp, abs, byte, char, insert, concat, sort, clear, yield, running = math.floor, math.clamp, math.abs, string.byte, string.char, table.insert, table.concat, table.sort, table.clear, coroutine.yield, coroutine.running 
+local floor, clamp, abs, byte, char, insert, concat, sort, clear, remove, find, yield, running = math.floor, math.clamp, math.abs, string.byte, string.char, table.insert, table.concat, table.sort, table.clear, table.remove, table.find, coroutine.yield, coroutine.running 
 
 local module = {}
 
@@ -92,6 +91,19 @@ end
 local componentsPerMedium = 16
 local maximumDigits = 7 
 
+module.addressCache = {}
+local addressCache = module.addressCache
+function module.makeAddress(index)
+    if addressCache[index] then
+        return addressCache[index]
+    end 
+
+    local address = "0x" .. base16(index)
+
+    addressCache[index] = address
+    return address
+end
+
 function module:encode(content, componentsPerMedium, maximumDigits)
     local encodedContent = ''
     local componentBuffer = ''
@@ -144,14 +156,14 @@ function module.buffer:getNextAvailableIndex()
         if module.superBufferCapacity - self.endIndex == 0 then 
             return 
         else 
-            return self.endIndex + 1, "0x" .. base16(self.endIndex + 1), self, nil
+            return self.endIndex + 1, module.makeAddress(self.endIndex + 1), self, nil
         end
     end
 
     for index = self.index + 1, superBuffer.size, do 
         local precedingBuffer = buffers[index - 1]
         if buffer.startingIndex - precedingBuffer.endingIndex > 1 then
-            return precedingBuffer.endingIndex + 1, "0x" .. base16(precedingBuffer.endingIndex + 1), precedingBuffer, buffer
+            return precedingBuffer.endingIndex + 1, module.makeAddress(precedingBuffer.endingIndex + 1), precedingBuffer, buffer
         end
     end
 end
@@ -166,6 +178,7 @@ local bufferMeta = {
  -- if not running in roblox you may have to implement the super buffer yourself 
 module.superBuffer = {
     size = 0,
+    capacity = 0,
     instance = nil, 
     initialized = false,
     safe = false,
@@ -181,7 +194,7 @@ local buffers = superBuffer.buffers
 local addresses = superBuffer.addresses
 
  -- Confine super buffer to a maximum size if large block counts consumes too many resources 
-module.superBufferCapacity = 250
+module.superBufferMaximumCapacity = 250
 module.useSuperBufferCapacity = true
 
 function module.superBuffer:assertInitialized()
@@ -190,10 +203,10 @@ end
 
 local zero = Vector3.zero
 
-function module.superBuffer:makeBlock(adhereToCapacity)
+function module.superBuffer:makeBlock()
      self:assertInitialized()
 
-     local address = "0x" .. base16(#self.addresses + 1)
+     local address = makeAddress(#self.addresses + 1)
 
      local block = Instance.new("Part")
      block.Size = zero
@@ -212,13 +225,17 @@ function orderAddressRanges(buffer1, buffer2)
 end
 
 function module.superBuffer:reorganize(skipRangeCalculation)
-    sort(self.buffers, orderAddressRanges)
+    if not self.safe then 
+        sort(self.buffers, orderAddressRanges)
 
-    for index, buffer in ipairs(self.buffers) do 
-        buffer.index = index 
+        for index, buffer in ipairs(self.buffers) do 
+            buffer.index = index 
+        end
+
+        self.size = #self.buffers
+
+        self.safe = true
     end
-
-    self.size = #self.buffers
 
     if not skipRangeCalculation then
         self:calculateAvailableRanges()
@@ -238,7 +255,7 @@ function module.superBuffer:getEarliestIndex()
         else
             local precedingBuffer = buffers[index - 1]
             if buffer.startIndex - precedingBuffer.endingIndex > 1 then
-                return precedingBuffer.endingIndex + 1, "0x" .. base16(precedingBuffer.endingIndex + 1), buffer.startIndex - precedingBuffer.endIndex, precedingBuffer
+                return precedingBuffer.endingIndex + 1, module.makeAddress(precedingBuffer.endingIndex + 1), buffer.startIndex - precedingBuffer.endIndex, precedingBuffer
             end
         end
     end
@@ -279,9 +296,10 @@ function sortRanges(range1, range2)
     return range1[1] < range2[1] 
 end
 
-function module.superBuffer:balloc(buffer, size)
+function module.superBuffer:balloc(buffer, size, forceCapacity)
     self:assertInitialized()
     self:reorganize()
+    module.async()
 
     local sufficentRanges = {}
 
@@ -293,11 +311,18 @@ function module.superBuffer:balloc(buffer, size)
 
     sort(sufficentRanges, sortRanges)
 
+    if not sufficentRanges[1] then
+        if forceCapacity then
+            local lastIndex = buffers[superBuffer.size]
+            self:incrementHeapCapacity()
+        end
+    end
+
     local range = sufficentRanges[1]
     local newStartIndex, newEndIndex = unpack(range)
 
     if buffer.startIndex then 
-        for index = 0, buffer.size - 1, 1 do 
+        for index = 0, buffer.capacity - 1, 1 do 
             local addressFrom, addressTo = buffer.startIndex + index, newStartIndex + index
             
             if self.customImplementation then
@@ -311,25 +336,105 @@ function module.superBuffer:balloc(buffer, size)
 
     buffer.startIndex = newStartIndex
     buffer.endIndex = newEndIndex
+
+    superBuffer.safe = false
+
+    return newStartIndex, newEndIndex
 end
 
+function module.superBuffer:incrementHeapCapacity(sizeIncrement, adhereToMaxCapacity) 
+    self:assertInitialized()
+    self:reorganize()
+    module.async()
+    local currentCapacity = self.capacity 
+    local newCapacity = currentCapacity + sizeIncrement
 
+    if module.useSuperBufferCapacity and adhereToMaxCapacity and newCapacity > module.superBufferMaximumCapacity then 
+        local difference = newCapacity - module.superBufferMaximumCapacity
+        warn (("Adhearing to max super buffer capacity policy(%s block(s) not created)"):format(difference))
+        newCapacity -= difference
+    end
 
-function module.buffer:new()
+    if newCapacity > currentCapacity then 
+        return warn "super buffer capacity not altered, current capacity is already greater than max capacity"
+    end
+
+    for index = currentCapacity + 1, currentCapacity + 1 + sizeIncrement, 1 do 
+        self:makeBlock(index, adhereToCapacity)
+    end
+end
+
+function module.buffer:new(capacity, forceCapacity, params)
     module:assertInitialized()
     local buffer = setmetatable({}, bufferMeta)
     insert(self.buffers, buffer)
 
+    buffer.capacity = capacity
+
+    if params and params.customImplementation then 
+        buffer.customImplementation = true
+        assert(params.read, "custom implementation must have a read function") 
+        assert(params.write, "custom implementation must have a write function")
+
+        buffer.read = params.read 
+        buffer.write = params.write
+        
+        if params.superBufferInit then
+            params.superBufferInit(superBuffer)
+        end
+    end
+
+    superBuffer:malloc(buffer, size, forceCapacity)
     return buffer
 end
 
 
 
  -- size in blocks, perhaps use bytes in the feature 
-function module:initializeSBuffer(size)
-
-
-
-    -- ...
+function module:initializeSBuffer()
+    
     self.superBuffer.initialized = true
 end
+
+module.suspendedThreads = {}
+module.processing = nil
+
+local suspendedThreads = module.suspendedThreads
+
+function module.async()
+    local thread = running()
+    if module.processing ~= thread then 
+        insert(suspendedThreads, thread)
+        module:wakeup()
+        yield()
+    end
+end
+
+function module:finish()
+    resume(module.thread)
+end
+
+function module:wakeup()
+    if not module.processing then 
+        resume(module.thread)  
+    end
+end
+
+module.thread = coroutine.wrap(function()
+    while true do 
+        local thread = remove(suspendedThreads, 1)
+
+        if thread then 
+            if status(thread) == "suspended" then
+                module.processing = thread
+                resume(thread)
+                yield()
+            else 
+                insert(suspendedThreads, thread, 1)
+            end
+        else 
+            module.processing = nil 
+            yield()
+        end
+    end
+)
